@@ -1,0 +1,29 @@
+# 固定 compose 项目名，避免目录改名导致容器/卷名漂移
+name: imgbed
+
+services:
+  imgbed:
+    build: .
+    image: imgbed-api:latest
+    container_name: imgbed
+    # 自启动 + 崩溃自动重启
+    restart: unless-stopped
+    # host 网络：OCI 主机上 bridge 网络到 VCN 内网（HeatWave 10.0.0.x）不通，
+    # 与 music-api / remind / wordrush-api 一致改用 host 模式；
+    # 服务监听 :18080（8080 属常用端口，按约定不占用），仅 cloudflared 隧道可达。
+    network_mode: host
+    env_file:
+      # .env.docker 由 ./gen-docker-env.sh 从 .env.sh 生成（纯 KEY=VALUE）。
+      # format: raw 关掉 `$VAR` 插值——密码里含 `$`，默认格式会把它吃掉。
+      - path: .env.docker
+        format: raw
+    volumes:
+      # 配置只读挂载，重新构建镜像不需要重打配置
+      - ./config.yaml:/data/config.yaml:ro
+    healthcheck:
+      # 镜像基于 alpine，自带 busybox wget
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:18080/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

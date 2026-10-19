@@ -1,0 +1,9 @@
+# 构建上下文里不需要的东西：既减体积，也避免密钥被 COPY 进镜像层
+.env
+.env.sh
+.env.systemd
+.env.docker
+config.yaml
+bin/
+*.exe
+.git

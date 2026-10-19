@@ -1,0 +1,19 @@
+[Unit]
+Description=imgbed — 图床（API + 前端 SPA 单进程）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/code/Imgbed/Imgbed-api
+# 密钥与 R2 凭据全部走 .env，不写进单元文件
+EnvironmentFile=/home/ubuntu/code/Imgbed/Imgbed-api/.env.systemd
+ExecStart=/home/ubuntu/code/Imgbed/Imgbed-api/bin/imgbed -config ./config.yaml
+# 崩溃/被杀 2 秒后自动拉起；systemd 自身的重启也有节流，不会打转
+Restart=always
+RestartSec=2
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
