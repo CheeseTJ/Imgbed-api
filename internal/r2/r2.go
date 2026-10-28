@@ -55,7 +55,8 @@ type Client struct {
 	usageCachedAt time.Time
 
 	// 账户级用量（全部 bucket 汇总）的缓存，与上面共用 usageMu。
-	// 构造成本更高（1 次列举 + N 次 usage），缓存价值也更大。
+	// 构造成本更高（1 次列举 + N 次 usage），缓存价值也更大，
+	// 所以 TTL 用的是更长的 acctUsageCacheTTL（5 分钟）。
 	acctCache    *AccountUsage
 	acctCachedAt time.Time
 }
@@ -217,10 +218,15 @@ func (c *Client) Exists(ctx context.Context, rel string) (bool, error) {
 
 // Ping 用一次最小代价的调用验证凭据与 bucket 是否真的可用。
 // 健康检查用它来回答「R2 到底通不通」，而不是只看配置里有没有填值。
+//
+// 刻意用 HeadBucket 而不是 ListObjectsV2(MaxKeys:1)：
+// 这个函数被 /api/health 调用，而容器的 healthcheck 每 30 秒打一次，
+// 一天就是 2880 次。ListObjects 属于 **Class A**（免费额度 100 万/月），
+// HeadBucket 属于 **Class B**（1000 万/月）——同样的可达性判断，
+// 换成 Class B 后额度消耗的余量大了 10 倍，且不产生列举开销。
 func (c *Client) Ping(ctx context.Context) error {
-	_, err := c.s3.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-		Bucket:  aws.String(c.bucket),
-		MaxKeys: aws.Int32(1),
+	_, err := c.s3.HeadBucket(ctx, &s3.HeadBucketInput{
+		Bucket: aws.String(c.bucket),
 	})
 	if err != nil {
 		return fmt.Errorf("访问 R2 bucket %s 失败: %w", c.bucket, err)

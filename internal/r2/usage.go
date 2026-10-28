@@ -24,6 +24,13 @@ const cfAPIBase = "https://api.cloudflare.com/client/v4"
 // 缓存一分钟既省额度，也避免前端在上传后连续刷新时打出突发请求。
 const usageCacheTTL = time.Minute
 
+// acctUsageCacheTTL 是**账户级**用量（全部 bucket 汇总）的缓存窗口。
+//
+// 刻意比 usageCacheTTL 长：一次汇总 = 1 次 ListBuckets + 每个桶 1 次 usage，
+// 而它只服务于侧栏 hover 面板上的那行装饰性数字（「整个账户用了多少」）。
+// 这种数据几分钟的延迟完全无感，却能把 Class B 的调用量按倍数压下去。
+const acctUsageCacheTTL = 5 * time.Minute
+
 // cfHTTP 是访问 Cloudflare 官方 API 的专用客户端。
 //
 // 刻意不复用 http.DefaultClient：没有超时的客户端在对方不响应时
@@ -242,7 +249,7 @@ func (c *Client) AccountUsage(ctx context.Context) (*AccountUsage, error) {
 	}
 
 	c.usageMu.Lock()
-	if c.acctCache != nil && time.Since(c.acctCachedAt) < usageCacheTTL {
+	if c.acctCache != nil && time.Since(c.acctCachedAt) < acctUsageCacheTTL {
 		u := *c.acctCache
 		c.usageMu.Unlock()
 		return &u, nil

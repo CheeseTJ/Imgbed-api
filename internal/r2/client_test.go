@@ -61,6 +61,11 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				`<MaxKeys>1</MaxKeys><IsTruncated>false</IsTruncated></ListBucketResult>`)
 			return
 		}
+		// 桶级 HEAD = HeadBucket，Ping 用它做可达性探测（Class B，不花 Class A）
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		http.Error(w, "not implemented", http.StatusNotImplemented)
 		return
 	}

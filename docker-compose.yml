@@ -21,8 +21,11 @@ services:
       # 配置只读挂载，重新构建镜像不需要重打配置
       - ./config.yaml:/data/config.yaml:ro
     healthcheck:
-      # 镜像基于 alpine，自带 busybox wget
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:18080/api/health"]
+      # 镜像基于 alpine，自带 busybox wget。
+      # 打 /healthz 而不是 /api/health：后者会顺带查 DB、JWKS 和 R2，
+      # 每 30 秒一次等于持续给 R2 打可达性探测（虽然是 Class B，但没必要）。
+      # 存活探针只该回答「进程还活着吗」——外部依赖挂了不该重启容器。
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:18080/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3
