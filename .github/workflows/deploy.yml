@@ -1,22 +1,6 @@
 name: Deploy
 
-# push 到 main 自动构建并部署到本机。
-#
-# 关键设计：**不用 runner 自己的工作目录**，而是直接更新真实部署目录
-# /home/ubuntu/code/Imgbed/Imgbed-api。
-#
-# 为什么：
-#   部署需要的三样东西都刻意不入库（.dockerignore 也排除）：
-#     .env.docker   — 数据库密码等密钥（由 gen-docker-env.sh 生成）
-#     .env.sh       — 上面那份的源头
-#     config.yaml   — 真实配置
-#   runner 默认在 _work/Imgbed-api/Imgbed-api 里 checkout，那里只有 git
-#   里的文件，`docker compose up` 会直接报 env file not found（首次实测
-#   正是这么失败的）。
-#
-#   把这些密钥塞进 GitHub Secrets 再还原是多此一举，还会让密钥多一份
-#   复制品（泄露面变大）。既然 runner 和服务本来就同机，直接对真实目录
-#   做 `git fetch && reset` 最干净：密钥原地不动，代码更新。
+# push 到 main 自动部署到本机（self-hosted runner 与服务同机，docker 部署）
 on:
   push:
     branches: [main]
@@ -29,63 +13,101 @@ on:
       - 'docker-compose.yml'
       - '.dockerignore'
       - '.github/workflows/deploy.yml'
-  workflow_dispatch: {}
-
-# 同一时间只跑一个部署，避免两次 push 的 docker compose 互相打架。
-concurrency:
-  group: deploy-imgbed
-  cancel-in-progress: false
-
-env:
-  DEPLOY_DIR: /home/ubuntu/code/Imgbed/Imgbed-api
+  workflow_dispatch: {}   # 支持在 GitHub 页面手动触发
 
 jobs:
   deploy:
     runs-on: self-hosted
     steps:
-      - name: 更新代码（保留本地未入库文件）
-        # reset --hard 只动 git 跟踪的文件；.env.docker / .env.sh /
-        # config.yaml 不在版本控制里，所以密码和真实配置原地保留。
-        run: |
-          cd "$DEPLOY_DIR"
-          git fetch --prune origin
-          git reset --hard "origin/main"
-          git --no-pager log --oneline -1
+      - uses: actions/checkout@v4
+        with:
+          # 不清理未跟踪文件，保住 runner 工作区里的本地状态
+          clean: false
 
       - name: Go test
-        run: |
-          cd "$DEPLOY_DIR"
-          go test ./... -count=1
+        run: go test ./... -count=1
 
-      - name: 重新生成 .env.docker
-        # 从 .env.sh 派生（compose 的 env_file 不执行 shell，读不了 .env.sh）。
-        # 改了 .env.sh 后这里也会跟上。
+      - name: Write config.yaml
         run: |
-          cd "$DEPLOY_DIR"
+          # 生产配置直接写在 workflow 里（不含任何密钥），改配置改这里。
+          # 密钥（DB 密码 / R2 凭据 / CF API Token）由下面生成的 .env.docker 注入，
+          # 见 internal/config/config.go 的 applyEnv。
+          cat > config.yaml <<'CONFIG'
+          # imgbed 运行配置（不含任何密钥，密钥全部来自 ./.env.docker）
+          server:
+            addr: ":18080"
+            allowed_origins:
+              - "https://img.taojun.top"
+              # CI/CD 控制台的「监控」视图由浏览器直连健康接口，需放行其来源
+              - "https://cicd.taojun.top"
+
+          ucenter:
+            base_url: "https://ucenter.june-t.top"
+            app: "imgbed"
+            jwks_ttl: "1h"
+
+          r2:
+            bucket: "image"
+            prefix: ""
+            public_base: "https://img.june-t.top"
+            private_prefix: "private/"
+            # 查真实占用用的 Cloudflare API Token，由 IMGBED_R2_CF_API_TOKEN 注入
+            cf_api_token: ""
+            # 存储配额（字节），进度条的分母。默认 10 GiB = R2 免费档。
+            quota_bytes: 10737418240
+
+          db:
+            host: "10.0.0.226"
+            port: 3306
+            name: "imgbed"
+            user: "junet"
+            # HeatWave 内部域名是自签证书，不能用 true（会强制校验证书而失败）
+            tls_mode: "preferred"
+            max_open_conns: 16
+            max_idle_conns: 8
+            conn_max_lifetime_sec: 180
+
+          limits:
+            max_upload_mb: 20
+            max_batch: 50
+            folder_migrate_warn: 5000
+            trash_retain_days: 7
+          CONFIG
+
+      - name: Write .env.docker from local single source
+        run: |
+          # 密钥单一来源是宿主机 /home/ubuntu/code/Imgbed/Imgbed-api/.env.sh
+          # （shell 格式，内部 source /home/ubuntu/db/.env）。
+          # docker-compose.yml 里这个 env_file 配了 format: raw，所以密码里的
+          # `$` 不会被 compose 当插值吃掉，不需要像 WordRush 那样转义 $$。
+          cp /home/ubuntu/code/Imgbed/Imgbed-api/.env.sh .env.sh
           ./gen-docker-env.sh
+          chmod 600 .env.docker
+
+      - name: Backup current image
+        run: sudo docker tag imgbed-api:latest imgbed-api:backup || true
 
       - name: Build & Up
-        run: |
-          cd "$DEPLOY_DIR"
-          sudo docker compose build
-          sudo docker compose up -d --force-recreate
+        run: sudo docker compose up -d --build
 
       - name: 健康检查
-        # 打 /healthz 而不是 /api/health：后者会连带查 HeatWave、
-        # Ucenter JWKS 和 R2，CI 不该因为三个外部服务之一抖动就判失败。
         run: |
+          # 打 /healthz 而不是 /api/health：后者会连带查 HeatWave、
+          # Ucenter JWKS 和 R2，CI 不该因为三个外部服务之一抖动就判失败。
           for i in $(seq 1 15); do
-            if curl -fsS http://127.0.0.1:18080/healthz >/dev/null 2>&1; then
+            if curl -fsS http://127.0.0.1:18080/healthz > /dev/null; then
               echo "healthy after $((i * 2))s"
               exit 0
             fi
             sleep 2
           done
-          echo "health check failed after 30s"
-          cd "$DEPLOY_DIR" && sudo docker compose logs --tail=50
+          echo "health check failed"
+          sudo docker compose logs --tail=50
           exit 1
 
-      - name: 清理旧镜像
-        # 每次构建留下一个旧镜像，长期能吃掉几个 GB。
-        if: always()
-        run: sudo docker image prune -f --filter "until=168h" || true
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          echo "部署失败，回滚旧镜像"
+          sudo docker tag imgbed-api:backup imgbed-api:latest || true
+          sudo docker compose up -d --no-build
