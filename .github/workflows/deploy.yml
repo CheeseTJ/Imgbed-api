@@ -1,15 +1,22 @@
 name: Deploy
 
-# push 到 main 自动构建并部署到本机（self-hosted runner 与服务同机）：
-#   go test → docker compose build → up -d 重建容器 → 健康检查。
+# push 到 main 自动构建并部署到本机。
 #
-# 与 Remind-api / JMReader-api 的 deploy.yml 同一套模式，差别只有端口和
-# 健康端点：
-#   - 健康检查打 /healthz 而不是 /api/health：后者会连带查 DB、JWKS 和 R2，
-#     部署后立刻打一次没问题，但没必要在 CI 里依赖三个外部服务都活着。
-#   - 用 --force-recreate 而不是裸 up -d：docker-compose.yml 里的
-#     healthcheck 改动不会让 compose 认为容器需要重建（它不参与配置哈希），
-#     必须显式强制重建才能生效。
+# 关键设计：**不用 runner 自己的工作目录**，而是直接更新真实部署目录
+# /home/ubuntu/code/Imgbed/Imgbed-api。
+#
+# 为什么：
+#   部署需要的三样东西都刻意不入库（.dockerignore 也排除）：
+#     .env.docker   — 数据库密码等密钥（由 gen-docker-env.sh 生成）
+#     .env.sh       — 上面那份的源头
+#     config.yaml   — 真实配置
+#   runner 默认在 _work/Imgbed-api/Imgbed-api 里 checkout，那里只有 git
+#   里的文件，`docker compose up` 会直接报 env file not found（首次实测
+#   正是这么失败的）。
+#
+#   把这些密钥塞进 GitHub Secrets 再还原是多此一举，还会让密钥多一份
+#   复制品（泄露面变大）。既然 runner 和服务本来就同机，直接对真实目录
+#   做 `git fetch && reset` 最干净：密钥原地不动，代码更新。
 on:
   push:
     branches: [main]
@@ -29,41 +36,56 @@ concurrency:
   group: deploy-imgbed
   cancel-in-progress: false
 
+env:
+  DEPLOY_DIR: /home/ubuntu/code/Imgbed/Imgbed-api
+
 jobs:
   deploy:
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
-        with:
-          # runner 的工作目录是复用的，保留 .git 能让增量拉取更快，
-          # 也避免每次都重新 clone 整个仓库。
-          clean: false
+      - name: 更新代码（保留本地未入库文件）
+        # reset --hard 只动 git 跟踪的文件；.env.docker / .env.sh /
+        # config.yaml 不在版本控制里，所以密码和真实配置原地保留。
+        run: |
+          cd "$DEPLOY_DIR"
+          git fetch --prune origin
+          git reset --hard "origin/main"
+          git --no-pager log --oneline -1
 
       - name: Go test
-        run: go test ./... -count=1
-
-      - name: Build & Up（docker compose）
         run: |
+          cd "$DEPLOY_DIR"
+          go test ./... -count=1
+
+      - name: 重新生成 .env.docker
+        # 从 .env.sh 派生（compose 的 env_file 不执行 shell，读不了 .env.sh）。
+        # 改了 .env.sh 后这里也会跟上。
+        run: |
+          cd "$DEPLOY_DIR"
+          ./gen-docker-env.sh
+
+      - name: Build & Up
+        run: |
+          cd "$DEPLOY_DIR"
           sudo docker compose build
           sudo docker compose up -d --force-recreate
 
       - name: 健康检查
+        # 打 /healthz 而不是 /api/health：后者会连带查 HeatWave、
+        # Ucenter JWKS 和 R2，CI 不该因为三个外部服务之一抖动就判失败。
         run: |
-          # 容器起来到 /healthz 可响应通常只要 1-2 秒，但首次启动要连
-          # HeatWave，给 30 秒窗口轮询，避免偶发超时让部署假失败。
           for i in $(seq 1 15); do
             if curl -fsS http://127.0.0.1:18080/healthz >/dev/null 2>&1; then
-              echo "healthy after ${i}s"
+              echo "healthy after $((i * 2))s"
               exit 0
             fi
             sleep 2
           done
           echo "health check failed after 30s"
-          sudo docker compose logs --tail=50
+          cd "$DEPLOY_DIR" && sudo docker compose logs --tail=50
           exit 1
 
-      - name: 镜像清理（只留最近两个）
-        # 每次构建都会留下一个旧镜像，长期累积能吃掉几个 GB。
+      - name: 清理旧镜像
+        # 每次构建留下一个旧镜像，长期能吃掉几个 GB。
         if: always()
-        run: |
-          sudo docker image prune -f --filter "until=168h" || true
+        run: sudo docker image prune -f --filter "until=168h" || true
