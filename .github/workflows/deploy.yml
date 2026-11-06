@@ -76,11 +76,11 @@ jobs:
 
       - name: Write .env.docker from local single source
         run: |
-          # 密钥单一来源是宿主机 /home/ubuntu/code/Imgbed/Imgbed-api/.env.sh
+          # 密钥单一来源是宿主机 /home/ubuntu/server/secrets/imgbed/.env.sh
           # （shell 格式，内部 source /home/ubuntu/db/.env）。
           # docker-compose.yml 里这个 env_file 配了 format: raw，所以密码里的
           # `$` 不会被 compose 当插值吃掉，不需要像 WordRush 那样转义 $$。
-          cp /home/ubuntu/code/Imgbed/Imgbed-api/.env.sh .env.sh
+          cp /home/ubuntu/server/secrets/imgbed/.env.sh .env.sh
           ./gen-docker-env.sh
           chmod 600 .env.docker
 
