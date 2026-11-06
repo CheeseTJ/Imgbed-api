@@ -17,6 +17,10 @@ on:
 
 jobs:
   deploy:
+    # 🔒 安全门禁：本 job 跑在 self-hosted runner（即生产服务器本身）。
+    # 仓库一旦公开，攻击者可通过 fork + PR 让你的服务器执行其代码。
+    # 这里强制只允许本仓库（owner 自己的分支）触发，外部 fork/PR 一律跳过。
+    if: github.repository_owner == 'CheeseTJ'
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
