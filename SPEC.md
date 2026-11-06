@@ -508,7 +508,7 @@ db:
 | `Imgbed-api/` | Docker 容器（`docker compose up -d`），跑在本机 `instance-20260820-1632`（同 VCN） | `https://imgbed.june-t.top` |
 | `Imgbed-web/` | Cloudflare Pages（构建产物纯静态） | `https://img.taojun.top` |
 | R2 | bucket `image` | `https://img.june-t.top`（图片直出） |
-| 元数据 | OCI HeatWave `10.0.0.226` / 库 `imgbed` | — |
+| 元数据 | 托管 MySQL（MySQL 兼容） / 库 `imgbed` | — |
 
 上线前检查清单：
 
@@ -606,12 +606,12 @@ https://img.june-t.top/nope-xyz.txt         → 404  基线，证明不是通配
 | 实例 | `mysql20260916150303`（OCID `ocid1.mysqldbsystem.oc1.ap-singapore-2.aaaaaaaayohpt2p6a3uc54k3qmqk524jc6rgnwgxvew4hixlhq6pnjdkg7dq`） |
 | 规格 | **`MySQL.Free`** —— OCI Always Free 档，**不计费** |
 | 版本 | MySQL 26.7.0-cloud |
-| 端点 | `10.0.0.226:3306`，**仅私网**（`mysql.publicsubnet.myfreevcn.oraclevcn.com`） |
+| 端点 | `<数据库私网地址>:3306`，**仅私网**（托管实例的内网域名） |
 | 字符集 | `utf8mb4` / `utf8mb4_0900_ai_ci`，与本项目 schema 默认值一致 |
 | `lower_case_table_names` | `0`（表名大小写敏感） |
 | `require_secure_transport` | `0`（不强制 TLS，但服务端支持，实际连接已加密为 TLS_AES_128_GCM_SHA256） |
 | 业务库 | **`imgbed`**（本项目专用，已创建） |
-| 账号 | `junet@%`（`ON *.*` 全权，与 `/home/ubuntu/db/.env` 中的 `SRC_MYSQL_USER` 同一个） |
+| 账号 | `<数据库账号>@%`（`ON *.*` 全权，与备份脚本中 `SRC_MYSQL_USER` 同一个） |
 
 ### 13.1 关于「HeatWave」这个名字
 
@@ -620,12 +620,12 @@ https://img.june-t.top/nope-xyz.txt         → 404  基线，证明不是通配
 
 ### 13.2 网络前提
 
-api 服务**必须跑在同一个 VCN 内**（即本机 `instance-20260820-1632`，私网 `10.0.0.180`），
+api 服务**必须跑在同一个 VCN / 私有网络内**（与数据库同网段），
 因为 MySQL 只有私网端点。跨机部署需另配公网端点或跳板机。
 
 ### 13.3 备份覆盖（⚠️ 待处理）
 
-现有备份脚本 `/home/ubuntu/db/bin/backup.sh` 用
+现有备份脚本（宿主机上的 `backup.sh`）用
 `mysqldump --databases "$DB_NAME"` 备份，而 `DB_NAME` 取自 `SRC_MYSQL_DATABASE=appdb`：
 
 ```

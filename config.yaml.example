@@ -32,7 +32,8 @@ db:
   #   1) 直接给 dsn
   #   2) 留空 dsn，用下面的分字段拼装（推荐，密码走环境变量 IMGBED_DB_PASSWORD）
   dsn: ""
-  host: ""                       # 本机实测：10.0.0.226（同一 VCN 内可直连）
+  # 数据库地址：填你的 MySQL 主机名或 IP（私网地址、托管实例的内网域名均可）
+  host: "db.example.internal"
   port: 3306
   name: "imgbed"
   user: "junet"

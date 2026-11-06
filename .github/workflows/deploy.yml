@@ -61,10 +61,12 @@ jobs:
             quota_bytes: 10737418240
 
           db:
-            host: "10.0.0.226"
+            # 留空：由 .env.docker 的 IMGBED_DB_HOST 注入（密钥单一来源，见下个 step）。
+            # 不要把真实内网地址写进仓库——仓库是公开的。
+            host: ""
             port: 3306
             name: "imgbed"
-            user: "junet"
+            user: "imgbed"
             # HeatWave 内部域名是自签证书，不能用 true（会强制校验证书而失败）
             tls_mode: "preferred"
             max_open_conns: 16
@@ -80,8 +82,7 @@ jobs:
 
       - name: Write .env.docker from local single source
         run: |
-          # 密钥单一来源是宿主机 /home/ubuntu/server/secrets/imgbed/.env.sh
-          # （shell 格式，内部 source /home/ubuntu/db/.env）。
+          # 密钥单一来源是宿主机上的一个 shell 环境文件（内部再 source 数据库凭据）。
           # docker-compose.yml 里这个 env_file 配了 format: raw，所以密码里的
           # `$` 不会被 compose 当插值吃掉，不需要像 WordRush 那样转义 $$。
           cp /home/ubuntu/server/secrets/imgbed/.env.sh .env.sh
